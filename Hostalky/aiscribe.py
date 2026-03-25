@@ -1,7 +1,25 @@
+'''
+Run the following command to install the necessary Python libraries:
+- pip install openai openai-agents
+
+Go to the OpenAI platform and generate your API key:
+- https://platform.openai.com/home
+
+Create a file to store your API key:
+- touch ./openai
+
+Replace {your API key} with your actual key:
+- echo "export OPENAI_API_KEY={your API key}" > ./openai
+
+Open your IDE and terminal, then run:
+- source ./openai
+'''
+
 import asyncio
 from pydantic import BaseModel
 from agents import Agent, Runner
 from openai import OpenAI
+
 
 client = OpenAI()
 # Example conversaiton
@@ -84,6 +102,11 @@ class Evidence(BaseModel):
 
 class Evidencelist(BaseModel):
     Evidences: list[Evidence]
+
+class SectionDraft(BaseModel):
+    section: str
+    draft_text: str
+    used_evidence_id: list[str]
 
 SOAP_TEMPLATE = NoteTemplate(
     template_name="SOAP",
@@ -411,22 +434,51 @@ standardization = Agent(
 section_extractor = Agent[SectionRule](
     name="Section Evidence Extractor",
     instructions="""
-                You are a clinical transcript normalizer.
+                You are a clinical evidence extraction system.
 
-                Your task is to clean and standardize a medical transcript WITHOUT changing its meaning.
+                You will receive:
+                1. A template name
+                2. A section rule
+                3. A structured transcript with speaker labels and turn_ids
+
+                Extract ONLY the evidence relevant to that one section.
 
                 Rules:
-                - Do NOT summarize or remove medical information
-                - Preserve all clinical meaning exactly
-                - Remove filler words only if they do not affect meaning
-                - Fix grammar and sentence structure
-                - Merge broken sentences
-                - Standardize units (mg, ml, etc.)
-                - Do NOT add new information
-
-                return ONLY the cleaned sentence.
+                - Use only information explicitly supported by the transcript
+                - Do not write the final note
+                - Output atomic evidence items only
+                - Attach source_turn_ids for every evidence item
+                - Preserve negations exactly
+                - Do not invent diagnoses, findings, treatments, or plans
+                - If no evidence belongs in the section, return an empty evidence list
                 """,
     output_type=Evidencelist,
+)
+
+section_drafter_agent = Agent[SectionRule](
+    name="Section Drafter",
+    instructions="""
+                You are a clinical note section drafter.
+
+                You will receive:
+                1. A note template section rule
+                2. Evidence items already extracted for that section
+
+                Your task:
+                - Draft ONLY that one section of the clinical note
+                - Use only the provided evidence
+                - Follow the allowed_content and forbidden_content rules strictly
+                - Preserve negations exactly
+                - Do not invent diagnoses, findings, plans, or details
+                - If there is no usable evidence, return a concise empty statement such as "Not discussed."
+                - Keep the language concise and clinical
+
+                Return:
+                - section: the exact section name
+                - draft_text: the drafted text for that section
+                - used_evidence_id: list of evidence IDs actually used in the draft
+                """,
+    output_type=SectionDraft,
 )
 
 async def normalizer():
@@ -462,6 +514,23 @@ async def extract_evidence_by_template(note_type: str) -> list:
         section = {"section": rule.name}
         section.update(section_evidence)
         final.append(section)
+    return final
+
+async def section_drafter(note_type):
+    if note_type not in TEMPLATES:
+        raise f"Unsupported note_type: {note_type}"
+    
+    template = TEMPLATES[note_type]
+    t = await extract_evidence_by_template(note_type)
+    final = []
+    i = 0
+    for rule in t:
+        result = await Runner.run(section_drafter_agent, str(rule["Evidences"]), context=template.sections[i])
+        section = {"Section": template.sections[i].name, 
+                   "draft_text": result.final_output.draft_text,
+                   "used_evidence_id": result.final_output.used_evidence_id}
+        i += 1
+        final.append(section)
     print(final)
 
-asyncio.run(extract_evidence_by_template("SOAP"))
+#asyncio.run(section_drafter("H&P"))
