@@ -4,6 +4,7 @@ from agents import Agent, Runner
 from openai import OpenAI
 
 client = OpenAI()
+# Example conversaiton
 text = """
 Clinician: Hi Mr. Patel, how have you been since your last visit?
 Patient: I've been okay, but my blood sugar has been a bit all over the place lately.
@@ -410,30 +411,21 @@ standardization = Agent(
 section_extractor = Agent[SectionRule](
     name="Section Evidence Extractor",
     instructions="""
-                You are a clinical evidence extraction system.
+                You are a clinical transcript normalizer.
 
-                You will receive:
-                1. A note template name
-                2. A section rule
-                3. A structured transcript with speaker labels and turn_ids
-
-                Your task:
-                Extract ONLY the evidence relevant to that ONE section.
+                Your task is to clean and standardize a medical transcript WITHOUT changing its meaning.
 
                 Rules:
-                - Use only information explicitly supported by the transcript
-                - Do not write the final note
-                - Output atomic evidence items only
-                - Attach source_turn_ids for every evidence item
-                - Preserve negations exactly
-                - Do not invent diagnoses, findings, treatments, or plans
-                - Respect the section's allowed_content and forbidden_content
-                - If no evidence belongs in the section, return an empty evidence list
-                - Create concise evidence types such as:
-                visit_reason, symptom, negated_symptom, history, medication, medication_request,
-                diagnosis, observation, demographic, family_history, social_history, plan, intervention, response
+                - Do NOT summarize or remove medical information
+                - Preserve all clinical meaning exactly
+                - Remove filler words only if they do not affect meaning
+                - Fix grammar and sentence structure
+                - Merge broken sentences
+                - Standardize units (mg, ml, etc.)
+                - Do NOT add new information
+
+                return ONLY the cleaned sentence.
                 """,
-    model="gpt-5.4",
     output_type=Evidencelist,
 )
 
@@ -472,3 +464,4 @@ async def extract_evidence_by_template(note_type: str) -> list:
         final.append(section)
     print(final)
 
+asyncio.run(extract_evidence_by_template("SOAP"))
